@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { MongoServerError, type Document, type Filter } from 'mongodb';
 import { config } from './config.js';
+import { recordInboundMessage } from './conversations.js';
 import { getDb } from './db.js';
 
 const knownWorkspaces = new Set(Object.keys(config.pigeon.apiKeys));
@@ -173,16 +174,10 @@ async function ensureIndexes(): Promise<void> {
   if (!indexesReady) {
     indexesReady = (async () => {
       const db = await getDb();
-      await Promise.all([
-        db.collection('pigeon_events').createIndex(
-          { workspace: 1, eventId: 1 },
-          { unique: true, name: 'workspace_event_id_unique' },
-        ),
-        db.collection('inbound_messages').createIndex(
-          { workspace: 1, messageId: 1 },
-          { unique: true, name: 'workspace_message_id_unique' },
-        ),
-      ]);
+      await db.collection('pigeon_events').createIndex(
+        { workspace: 1, eventId: 1 },
+        { unique: true, name: 'workspace_event_id_unique' },
+      );
     })();
   }
 
@@ -196,14 +191,13 @@ async function ensureIndexes(): Promise<void> {
 
 async function storeInboundEvent(event: InboundEvent, occurredAt: Date): Promise<void> {
   const db = await getDb();
-  const messageFilter = { workspace: event.workspace, messageId: event.data.message_id };
-  await upsertOnce(db.collection('inbound_messages'), messageFilter, {
-    ...messageFilter,
+  await recordInboundMessage({
+    workspace: event.workspace,
     contact: event.data.from,
+    messageId: event.data.message_id,
     text: event.data.text,
     occurredAt,
     eventId: event.id,
-    receivedAt: new Date(),
   });
   await storeEventReceipt(db.collection('pigeon_events'), event, occurredAt);
 }
