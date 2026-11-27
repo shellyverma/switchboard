@@ -32,7 +32,12 @@ after(async () => {
       await Promise.all([
         client.db().collection('outbound_messages').deleteMany({ workspace }),
         client.db().collection('conversations').deleteMany({ workspace }),
-        getRedis().del(rateLimitKey(workspace)),
+        getRedis().del(
+          rateLimitKey(workspace),
+          `switchboard:events:${encodeURIComponent(workspace)}:seq`,
+          `switchboard:events:${encodeURIComponent(workspace)}:stream`,
+          `switchboard:events:${encodeURIComponent(workspace)}:dedupe`,
+        ),
       ]);
       delete config.pigeon.apiKeys[workspace];
     }),

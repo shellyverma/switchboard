@@ -4,6 +4,7 @@ import { MongoServerError, type Document, type Filter } from 'mongodb';
 import { config } from './config.js';
 import { recordInboundMessage } from './conversations.js';
 import { getDb } from './db.js';
+import { publishWorkspaceEvent } from './realtime.js';
 
 const knownWorkspaces = new Set(Object.keys(config.pigeon.apiKeys));
 
@@ -200,6 +201,11 @@ async function storeInboundEvent(event: InboundEvent, occurredAt: Date): Promise
     eventId: event.id,
   });
   await storeEventReceipt(db.collection('pigeon_events'), event, occurredAt);
+  await publishWorkspaceEvent(event.workspace, `pigeon:${event.id}`, {
+    type: 'message.inbound',
+    contact: event.data.from,
+    message_id: event.data.message_id,
+  });
 }
 
 async function storeStatusEvent(event: StatusEvent, occurredAt: Date): Promise<void> {
@@ -219,13 +225,39 @@ async function storeStatusEvent(event: StatusEvent, occurredAt: Date): Promise<v
     statusFilter.status = { $nin: ['delivered', 'failed'] };
   }
 
-  await db.collection('outbound_messages').updateOne(statusFilter, {
+  const updated = await db.collection('outbound_messages').updateOne(statusFilter, {
     $set: {
       status: event.data.status,
       statusAt: occurredAt,
       providerMessageId: event.data.message_id,
     },
   });
+  const current =
+    updated.matchedCount === 1
+      ? { status: event.data.status, statusAt: occurredAt }
+      : await db.collection('outbound_messages').findOne(outboundFilter, {
+          projection: { status: 1, statusAt: 1 },
+        });
+  if (
+    !current ||
+    (current['status'] !== 'sent' &&
+      current['status'] !== 'delivered' &&
+      current['status'] !== 'failed') ||
+    !(current['statusAt'] instanceof Date)
+  ) {
+    return;
+  }
+  await publishWorkspaceEvent(
+    event.workspace,
+    `status:${event.data.client_ref}:${current['status']}`,
+    {
+      type: 'message.status',
+      contact: String(outbound['contact']),
+      client_ref: event.data.client_ref,
+      status: current['status'],
+      status_at: current['statusAt'].toISOString(),
+    },
+  );
 }
 
 async function storeEventReceipt(

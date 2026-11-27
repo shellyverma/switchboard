@@ -1,5 +1,6 @@
 import { MongoServerError, type Document, type Filter } from 'mongodb';
 import { getDb } from './db.js';
+import { publishWorkspaceEvent } from './realtime.js';
 
 export type ConversationStatus = 'open' | 'closed';
 
@@ -87,6 +88,7 @@ export async function ensureConversation(
     ...conversationFilter,
     status: 'open',
     assignee: null,
+    assignmentVersion: 0,
     createdAt: activityAt,
   }, { lastActivityAt: activityAt });
 }
@@ -172,21 +174,45 @@ export async function claimConversation(
       ...conversationFilter,
       status: 'open',
       assignee: null,
+      assignmentVersion: 0,
       createdAt: now,
     },
     { lastActivityAt: now },
   );
 
-  const result = await collection.updateOne(
+  const claimedConversation = await collection.findOneAndUpdate(
     {
       ...conversationFilter,
       $or: [{ assignee: null }, { assignee: agent }],
     },
-    { $set: { assignee: agent, lastActivityAt: now } },
+    [
+      {
+        $set: {
+          assignmentVersion: {
+            $cond: [
+              { $eq: ['$assignee', agent] },
+              { $ifNull: ['$assignmentVersion', 0] },
+              { $add: [{ $ifNull: ['$assignmentVersion', 0] }, 1] },
+            ],
+          },
+          assignee: agent,
+          lastActivityAt: now,
+        },
+      },
+    ],
+    { returnDocument: 'after' },
   );
-  const conversation = await collection.findOne(conversationFilter);
+  const conversation = claimedConversation ?? (await collection.findOne(conversationFilter));
   if (!conversation) throw new Error('Conversation disappeared during claim');
-  return { claimed: result.matchedCount === 1, conversation };
+  if (claimedConversation) {
+    const assignmentVersion = Number(claimedConversation['assignmentVersion'] ?? 0);
+    await publishWorkspaceEvent(workspace, `assignment:${contact}:${assignmentVersion}`, {
+      type: 'conversation.assigned',
+      contact,
+      assignee: agent,
+    });
+  }
+  return { claimed: claimedConversation !== null, conversation };
 }
 
 export async function setConversationStatus(
@@ -197,12 +223,27 @@ export async function setConversationStatus(
   await ensureConversationIndexes();
   const db = await getDb();
   const filter = { workspace, contact };
-  const result = await db.collection('conversations').updateOne(filter, {
-    $set: { status, lastActivityAt: new Date() },
-  });
-  if (result.matchedCount === 0) return undefined;
-  const conversation = await db.collection('conversations').findOne(filter);
-  return conversation ?? undefined;
+  const updatedAt = new Date();
+  const conversation = await db.collection('conversations').findOneAndUpdate(
+    { ...filter, status: { $ne: status } },
+    { $set: { status, lastActivityAt: updatedAt } },
+    { returnDocument: 'after' },
+  );
+  if (conversation) {
+    await publishWorkspaceEvent(
+      workspace,
+      `conversation-status:${contact}:${status}:${updatedAt.getTime()}`,
+      {
+        type: 'conversation.status',
+        contact,
+        status,
+      },
+    );
+    return conversation;
+  }
+  const existing = await db.collection('conversations').findOne(filter);
+  if (existing?.['status'] !== status) return undefined;
+  return existing;
 }
 
 async function upsertOnInsert(

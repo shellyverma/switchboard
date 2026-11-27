@@ -3,6 +3,7 @@ import type { Document } from 'mongodb';
 import { config } from './config.js';
 import { ensureConversation } from './conversations.js';
 import { getDb } from './db.js';
+import { publishWorkspaceEvent } from './realtime.js';
 import { getRedis } from './redis.js';
 
 type ReplyInput = {
@@ -114,17 +115,23 @@ export async function enqueueReply(input: ReplyInput): Promise<Document> {
     nextAttemptAt: now,
   };
 
+  let stored: Document | null = null;
   try {
     await collection.updateOne(filter, { $setOnInsert: reply }, { upsert: true });
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error;
-    const existing = await collection.findOne(filter);
-    if (!existing) throw error;
-    return existing;
+    stored = await collection.findOne(filter);
+    if (!stored) throw error;
   }
 
-  const stored = await collection.findOne(filter);
+  stored ??= await collection.findOne(filter);
   if (!stored) throw new Error('Reply was not persisted');
+  await publishWorkspaceEvent(input.workspace, `outbound:${input.clientRef}`, {
+    type: 'message.outbound',
+    contact: input.contact,
+    client_ref: input.clientRef,
+    status: String(stored['status']),
+  });
   return stored;
 }
 
@@ -333,6 +340,7 @@ async function markAccepted(
       { $unset: ['leaseOwner', 'leaseUntil', 'nextAttemptAt', 'lastError'] },
     ],
   );
+  await publishCurrentReplyStatus(collection, job);
 }
 
 async function markPermanentlyFailed(
@@ -357,6 +365,49 @@ async function markPermanentlyFailed(
       },
       { $unset: ['leaseOwner', 'leaseUntil', 'nextAttemptAt'] },
     ],
+  );
+  await publishCurrentReplyStatus(collection, job);
+}
+
+async function publishCurrentReplyStatus(
+  collection: ReturnType<Awaited<ReturnType<typeof getDb>>['collection']>,
+  job: Document,
+): Promise<void> {
+  const reply = await collection.findOne(
+    { _id: job._id },
+    {
+      projection: {
+        workspace: 1,
+        contact: 1,
+        clientRef: 1,
+        status: 1,
+        statusAt: 1,
+        sentAt: 1,
+        failedAt: 1,
+      },
+    },
+  );
+  if (
+    !reply ||
+    (reply['status'] !== 'sent' &&
+      reply['status'] !== 'delivered' &&
+      reply['status'] !== 'failed')
+  ) {
+    return;
+  }
+  const statusAt = [reply['statusAt'], reply['sentAt'], reply['failedAt']].find(
+    (value): value is Date => value instanceof Date,
+  );
+  await publishWorkspaceEvent(
+    String(reply['workspace']),
+    `status:${String(reply['clientRef'])}:${reply['status']}`,
+    {
+      type: 'message.status',
+      contact: String(reply['contact']),
+      client_ref: String(reply['clientRef']),
+      status: reply['status'],
+      ...(statusAt ? { status_at: statusAt.toISOString() } : {}),
+    },
   );
 }
 

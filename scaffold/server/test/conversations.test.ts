@@ -4,6 +4,7 @@ import { after, before, test } from 'node:test';
 import { MongoClient } from 'mongodb';
 import { config } from '../src/config.js';
 import { closeDb } from '../src/db.js';
+import { closeRedis, getRedis } from '../src/redis.js';
 import {
   claimConversation,
   ensureConversationIndexes,
@@ -32,6 +33,16 @@ after(async () => {
       ]);
     }),
   );
+  await Promise.all(
+    workspaces.map((workspace) =>
+      getRedis().del(
+        `switchboard:events:${encodeURIComponent(workspace)}:seq`,
+        `switchboard:events:${encodeURIComponent(workspace)}:stream`,
+        `switchboard:events:${encodeURIComponent(workspace)}:dedupe`,
+      ),
+    ),
+  );
+  await closeRedis();
   await closeDb();
   await client.close();
 });

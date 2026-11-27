@@ -133,7 +133,13 @@ export async function finishLogin(req: Request, res: Response): Promise<void> {
 }
 
 export async function getAuthenticatedUser(req: Request): Promise<AuthenticatedUser | undefined> {
-  const sessionId = readCookie(req.headers.cookie, sessionCookieName);
+  return getAuthenticatedUserFromCookie(req.headers.cookie);
+}
+
+export async function getAuthenticatedUserFromCookie(
+  cookieHeader: string | undefined,
+): Promise<AuthenticatedUser | undefined> {
+  const sessionId = readCookie(cookieHeader, sessionCookieName);
   if (!sessionId) return undefined;
 
   const key = sessionKey(sessionId);

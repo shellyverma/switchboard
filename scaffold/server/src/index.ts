@@ -19,6 +19,7 @@ import {
 } from './conversations.js';
 import { enqueueReply, startReplyWorker } from './outbound.js';
 import { handlePigeonWebhook } from './pigeonWebhook.js';
+import { attachRealtime } from './realtime.js';
 
 const app = express();
 
@@ -275,14 +276,14 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 // A plain http server, so you can attach WebSockets to it.
 const server = createServer(app);
-void startReplyWorker()
+void Promise.all([startReplyWorker(), attachRealtime(server)])
   .then(() => {
     server.listen(config.port, () => {
       console.log(`server on http://localhost:${config.port}`);
     });
   })
   .catch((error: unknown) => {
-    console.error('Failed to start outbound reply worker', error);
+    console.error('Failed to start server workers', error);
     process.exitCode = 1;
   });
 
