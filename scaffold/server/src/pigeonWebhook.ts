@@ -220,7 +220,11 @@ async function storeStatusEvent(event: StatusEvent, occurredAt: Date): Promise<v
   }
 
   await db.collection('outbound_messages').updateOne(statusFilter, {
-    $set: { status: event.data.status, statusAt: occurredAt },
+    $set: {
+      status: event.data.status,
+      statusAt: occurredAt,
+      providerMessageId: event.data.message_id,
+    },
   });
 }
 

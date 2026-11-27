@@ -62,16 +62,8 @@ export async function recordInboundMessage(input: {
   eventId: string;
   occurredAt: Date;
 }): Promise<void> {
-  await ensureConversationIndexes();
+  await ensureConversation(input.workspace, input.contact, input.occurredAt);
   const db = await getDb();
-  const conversationFilter = { workspace: input.workspace, contact: input.contact };
-  await upsertOnInsert(db.collection('conversations'), conversationFilter, {
-    ...conversationFilter,
-    status: 'open',
-    assignee: null,
-    createdAt: input.occurredAt,
-  }, { lastActivityAt: input.occurredAt });
-
   const messageFilter = { workspace: input.workspace, messageId: input.messageId };
   await upsertOnInsert(db.collection('inbound_messages'), messageFilter, {
     ...messageFilter,
@@ -81,6 +73,22 @@ export async function recordInboundMessage(input: {
     eventId: input.eventId,
     receivedAt: new Date(),
   });
+}
+
+export async function ensureConversation(
+  workspace: string,
+  contact: string,
+  activityAt = new Date(),
+): Promise<void> {
+  await ensureConversationIndexes();
+  const db = await getDb();
+  const conversationFilter = { workspace, contact };
+  await upsertOnInsert(db.collection('conversations'), conversationFilter, {
+    ...conversationFilter,
+    status: 'open',
+    assignee: null,
+    createdAt: activityAt,
+  }, { lastActivityAt: activityAt });
 }
 
 export async function listConversations(

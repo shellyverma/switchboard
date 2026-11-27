@@ -8,3 +8,9 @@ export function getRedis(): Redis {
   if (!redis) redis = new Redis(config.redisUrl, { lazyConnect: false, maxRetriesPerRequest: 2 });
   return redis;
 }
+
+export async function closeRedis(): Promise<void> {
+  const activeRedis = redis;
+  redis = undefined;
+  if (activeRedis) await activeRedis.quit();
+}

@@ -16,6 +16,7 @@ import {
   listConversations,
   setConversationStatus,
 } from './conversations.js';
+import { enqueueReply, startReplyWorker } from './outbound.js';
 import { handlePigeonWebhook } from './pigeonWebhook.js';
 
 const app = express();
@@ -103,6 +104,31 @@ app.get(
 );
 
 app.post(
+  '/api/conversations/:contact/reply',
+  asyncRoute(async (req, res) => {
+    const workspace = queryString(req.query.workspace);
+    if (!workspace) {
+      res.status(400).json({ error: 'workspace is required' });
+      return;
+    }
+    if (!(await authorizeWorkspace(req, res, workspace))) return;
+
+    const { text, client_ref: clientRef } = req.body ?? {};
+    if (typeof text !== 'string' || !text || typeof clientRef !== 'string' || !clientRef) {
+      res.status(400).json({ error: 'text and client_ref are required' });
+      return;
+    }
+    const reply = await enqueueReply({
+      workspace,
+      contact: req.params.contact,
+      text,
+      clientRef,
+    });
+    res.status(202).json({ client_ref: reply.clientRef, status: reply.status });
+  }),
+);
+
+app.post(
   '/api/conversations/:contact/claim',
   asyncRoute(async (req, res) => {
     const workspace = queryString(req.query.workspace);
@@ -150,6 +176,36 @@ for (const [action, status] of [
 }
 
 app.post(
+  '/__grader/reply',
+  asyncRoute(async (req, res) => {
+    if (!isValidGraderToken(req.get('x-grader-token'))) {
+      res.sendStatus(401);
+      return;
+    }
+    const { workspace, contact, text, client_ref: clientRef } = req.body ?? {};
+    if (
+      typeof workspace !== 'string' ||
+      typeof contact !== 'string' ||
+      typeof text !== 'string' ||
+      typeof clientRef !== 'string' ||
+      !contact ||
+      !text ||
+      !clientRef
+    ) {
+      res.status(400).json({ error: 'workspace, contact, text, and client_ref are required' });
+      return;
+    }
+    if (!Object.hasOwn(config.pigeon.apiKeys, workspace)) {
+      res.status(400).json({ error: 'unknown workspace' });
+      return;
+    }
+
+    const reply = await enqueueReply({ workspace, contact, text, clientRef });
+    res.status(202).json({ client_ref: reply.clientRef, status: reply.status });
+  }),
+);
+
+app.post(
   '/__grader/claim',
   asyncRoute(async (req, res) => {
     if (!isValidGraderToken(req.get('x-grader-token'))) {
@@ -195,9 +251,16 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 // A plain http server, so you can attach WebSockets to it.
 const server = createServer(app);
-server.listen(config.port, () => {
-  console.log(`server on http://localhost:${config.port}`);
-});
+void startReplyWorker()
+  .then(() => {
+    server.listen(config.port, () => {
+      console.log(`server on http://localhost:${config.port}`);
+    });
+  })
+  .catch((error: unknown) => {
+    console.error('Failed to start outbound reply worker', error);
+    process.exitCode = 1;
+  });
 
 function asyncRoute(handler: (req: Request, res: Response) => Promise<void>): RequestHandler {
   return (req, res, next) => {
