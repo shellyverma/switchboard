@@ -9,6 +9,7 @@ import {
   startLogin,
 } from './auth.js';
 import { config } from './config.js';
+import { buildGraderSnapshot, resetApplicationData } from './grader.js';
 import {
   claimConversation,
   getConversationMessages,
@@ -174,6 +175,29 @@ for (const [action, status] of [
     }),
   );
 }
+
+app.post(
+  '/__grader/reset',
+  asyncRoute(async (req, res) => {
+    if (!isValidGraderToken(req.get('x-grader-token'))) {
+      res.sendStatus(401);
+      return;
+    }
+    await resetApplicationData();
+    res.sendStatus(200);
+  }),
+);
+
+app.get(
+  '/__grader/snapshot',
+  asyncRoute(async (req, res) => {
+    if (!isValidGraderToken(req.get('x-grader-token'))) {
+      res.sendStatus(401);
+      return;
+    }
+    res.json(await buildGraderSnapshot());
+  }),
+);
 
 app.post(
   '/__grader/reply',
