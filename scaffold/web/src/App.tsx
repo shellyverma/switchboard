@@ -178,6 +178,10 @@ export function App() {
       socket.onopen = () => {
         attempts = 0;
         setConnection('live');
+        setRefreshInbox((current) => current + 1);
+        if (selectedContactRef.current) {
+          setRefreshThread((current) => current + 1);
+        }
       };
       socket.onmessage = (frame) => {
         const event = parseLiveEvent(frame.data);

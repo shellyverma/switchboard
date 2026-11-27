@@ -216,10 +216,15 @@ async function storeStatusEvent(event: StatusEvent, occurredAt: Date): Promise<v
 
   await storeEventReceipt(db.collection('pigeon_events'), event, occurredAt);
 
+  const eligibleStatuses = [
+    { statusAt: { $exists: false } },
+    { statusAt: { $lt: occurredAt } },
+    ...(event.data.status === 'sent' ? [] : [{ statusAt: occurredAt, status: 'sent' }]),
+  ];
   const statusFilter: Filter<Document> = {
     _id: outbound._id,
     ...outboundFilter,
-    $or: [{ statusAt: { $exists: false } }, { statusAt: { $lt: occurredAt } }],
+    $or: eligibleStatuses,
   };
   if (event.data.status === 'sent') {
     statusFilter.status = { $nin: ['delivered', 'failed'] };
